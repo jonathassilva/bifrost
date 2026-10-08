@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""
+virussign_downloader.py
+-----------------------
+Downloads VirusSign files (and associated metadata) for a given date.
+
+The script uses wget for ALL HTTP operations:
+  - Fetching directory listings  (wget -O -)
+  - Downloading files            (wget --input-file)
+
+Credentials are read from 'virussign.auth', located in the same directory
+as this script. The file must contain exactly two lines:
+  Line 1: username
+  Line 2: password
+
+IMPORTANT: Add 'virussign.auth' to your .gitignore to avoid leaking credentials.
+
+Usage:
+    python virussign_downloader.py 2026/05/16
+    python virussign_downloader.py --date 2026/05/16
+
+Output layout:
+    malwares-virus-sign/<YYYYMMDD>/
+"""
+
+import argparse
+import platform
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import urljoin
+
+from bs4 import BeautifulSoup
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Constants
+# ──────────────────────────────────────────────────────────────────────────────
+
+BASE_URL         = "https://premium2.virussign.com/android"
+METADATA_PATH    = "metadata/"
+OUTPUT_ROOT = Path("../android-virus-sign")
+AUTH_FILE        = Path(__file__).parent / "virussign.auth"
+ARCHIVE_PASSWORD = "infected"
+
+# wget flags shared by every call
+WGET_COMMON = [
+    "--quiet",           # suppress verbose output; progress shown separately
+    "-e", "robots=off",  # ignore robots.txt (common in malware repos)
+]
+
+# wget flags used only during file downloads
+WGET_DOWNLOAD = [
+    "--continue",        # resume interrupted downloads
+    "--tries=3",         # retry up to 3 times per file
+    "--wait=1",          # 1 s between requests
+    "--random-wait",     # randomise wait +-0.5x to avoid rate-limit
+    "--progress=bar",    # show a clean progress bar per file
+    "--show-progress",   # keep progress visible even in quiet mode
+]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def check_wget() -> str:
+    """
+    Return the path to the wget executable, or raise RuntimeError if not found.
+    On Windows, prefer 'wget.exe' but also accept 'wget'.
+    """
+    candidates = ["wget.exe", "wget"] if platform.system() == "Windows" else ["wget"]
+    for name in candidates:
+        path = shutil.which(name)
+        if path:
+            return path
+    raise RuntimeError(
+        "wget not found in PATH.\n"
+        "  Linux  : sudo apt install wget   (or equivalent)\n"
+        "  Windows: install via https://eternallybored.org/misc/wget/ "
+        "or 'choco install wget' and ensure it is in PATH."
+    )
+
+
+def load_credentials() -> tuple[str, str]:
+    """
+    Read username and password from virussign.auth.
+    The file must contain exactly two non-empty lines:
+      Line 1: username
+      Line 2: password
+    Raises RuntimeError with clear instructions if the file is missing or malformed.
+    """
+    if not AUTH_FILE.exists():
+        raise RuntimeError(
+            f"Credentials file not found: {AUTH_FILE}\n\n"
+            "Create 'virussign.auth' in the same directory as this script:\n"
+            "  Line 1: your username\n"
+            "  Line 2: your password\n\n"
+            "Example:\n"
+            "  a_sidi\n"
+            "  your_password_here\n\n"
+            "IMPORTANT: add 'virussign.auth' to your .gitignore."
+        )
+
+    lines = [l.strip() for l in AUTH_FILE.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    if len(lines) < 2:
+        raise RuntimeError(
+            f"Malformed credentials file: {AUTH_FILE}\n"
+            "Expected exactly 2 lines — username on line 1, password on line 2."
+        )
+
+    return lines[0], lines[1]
+
+
+def parse_date(raw: str) -> str:
+    """
+    Accept YYYY/MM/DD or YYYYMMDD and return compact YYYYMMDD.
+    Raises ValueError for invalid input.
+    """
+    raw = raw.strip().replace("/", "").replace("-", "")
+    if len(raw) != 8 or not raw.isdigit():
+        raise ValueError(f"Invalid date '{raw}'. Expected YYYY/MM/DD or YYYYMMDD.")
+    
+    datetime.strptime(raw, "%Y%m%d")  # validates calendar correctness
+    # Specific formato 
+    return raw[2:]
+
+
+def build_wget_auth(username: str, password: str) -> list[str]:
+    """Return wget auth flags for the given credentials."""
+    return [f"--user={username}", f"--password={password}"]
+
+
+def fetch_listing(wget_bin: str, url: str, auth_flags: list[str]) -> str:
+    """
+    Fetch a directory listing HTML via wget and return it as a string.
+    Uses -O - to write output to stdout.
+    """
+    cmd = [wget_bin] + WGET_COMMON + auth_flags + ["-O", "-", url]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"wget failed fetching listing from {url}\n"
+            f"  stderr: {result.stderr.strip()}"
+        )
+    return result.stdout
+
+
+def parse_links(html: str, base_url: str, date_compact: str) -> list[str]:
+    """
+    Parse an IIS directory listing and return absolute URLs
+    whose filenames contain the given date string.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    urls = []
+    for tag in soup.find_all("a", href=True):
+        href = tag["href"]
+        # Skip navigation links
+        if href.startswith("?") or href == "/" or "/../" in href:
+            continue
+        # Only keep links whose path contains the date
+        if date_compact not in href:
+            continue
+        # Build absolute URL (href may be absolute or relative)
+        full_url = href if href.startswith("http") else urljoin(base_url, href)
+        urls.append(full_url)
+    return urls
+
+
+def build_url_file(urls: list[str], path: Path) -> None:
+    """Write one URL per line to an input file for wget."""
+    path.write_text("\n".join(urls) + "\n", encoding="utf-8")
+
+
+def run_wget_download(
+    wget_bin: str,
+    url_file: Path,
+    dest_dir: Path,
+    auth_flags: list[str],
+) -> int:
+    """
+    Invoke wget with --input-file to download all URLs in url_file
+    into dest_dir. Returns wget's exit code.
+    """
+    cmd = (
+        [wget_bin]
+        + WGET_COMMON
+        + auth_flags
+        + WGET_DOWNLOAD
+        + [
+            f"--input-file={url_file}",
+            f"--directory-prefix={dest_dir}",
+            "--no-host-directories",   # don't recreate host dir inside dest
+            "--cut-dirs=1",            # drop the /subscribers/ path component
+        ]
+    )
+    # Print command without credentials for safety
+    safe_cmd = [wget_bin] + WGET_COMMON + ["--user=***", "--password=***"] + WGET_DOWNLOAD + [
+        f"--input-file={url_file}",
+        f"--directory-prefix={dest_dir}",
+        "--no-host-directories",
+        "--cut-dirs=1",
+    ]
+    print(f"[wget] {' '.join(safe_cmd)}\n")
+    result = subprocess.run(cmd)
+    return result.returncode
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Core workflow
+# ──────────────────────────────────────────────────────────────────────────────
+
+def download_for_date(date_input: str) -> None:
+    date_compact = parse_date(date_input)
+    print(f"\n[info] Target date : {date_compact}")
+
+    wget_bin = check_wget()
+    print(f"[info] wget binary : {wget_bin}")
+
+    username, password = load_credentials()
+    print(f"[info] Credentials : loaded from {AUTH_FILE} (user: {username})")
+    auth_flags = build_wget_auth(username, password)
+
+    dest_dir = OUTPUT_ROOT / date_compact
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[info] Output dir  : {dest_dir.resolve()}\n")
+
+    all_urls: list[str] = []
+
+    # ── Step 1: main listing ───────────────────────────────────────────────────
+    print(f"[step 1] Fetching main listing: {BASE_URL}")
+    html = fetch_listing(wget_bin, BASE_URL, auth_flags)
+    main_urls = parse_links(html, BASE_URL, date_compact)
+    print(f"         Found {len(main_urls)} file(s) matching {date_compact}")
+    all_urls.extend(main_urls)
+
+    # ── Step 2: metadata listing ───────────────────────────────────────────────
+    # metadata_url = urljoin(BASE_URL, METADATA_PATH)
+    print(f"\n[step 2] Fetching metadata listing: {BASE_URL}")
+    try:
+        html_meta = fetch_listing(wget_bin, BASE_URL, auth_flags)
+        meta_urls = parse_links(html_meta, BASE_URL, date_compact+"_metadata")
+        print(f"         Found {len(meta_urls)} metadata file(s) matching {date_compact}")
+        all_urls.extend(meta_urls)
+    except RuntimeError as exc:
+        print(f"[warn] Could not fetch metadata listing: {exc}", file=sys.stderr)
+
+    if not all_urls:
+        print(f"\n[done] No files found for date {date_compact}. Nothing to download.")
+        return
+
+    # ── Step 3: download all files via wget --input-file ──────────────────────
+    print(f"\n[step 3] Downloading {len(all_urls)} file(s) into {dest_dir.resolve()}")
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as tmp:
+        url_file = Path(tmp.name)
+        build_url_file(all_urls, url_file)
+        print(f"[info]  URL list written to {url_file}")
+
+    try:
+        exit_code = run_wget_download(wget_bin, url_file, dest_dir, auth_flags)
+    finally:
+        url_file.unlink(missing_ok=True)
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    downloaded = list(dest_dir.iterdir())
+    print(f"\n[done] {len(downloaded)} file(s) saved to {dest_dir.resolve()}")
+
+    if exit_code != 0:
+        print(
+            f"[warn] wget exited with code {exit_code}. "
+            "Some files may not have downloaded. Check output above.",
+            file=sys.stderr,
+        )
+
+    if downloaded:
+        print("\n  Reminder : extract archives in an isolated VM/sandbox.")
+        print(f"  Archive password (industry standard): {ARCHIVE_PASSWORD}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Entry point
+# ──────────────────────────────────────────────────────────────────────────────
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Download VirusSign files for a specific date using wget.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python virussign_downloader.py 2026/05/16
+  python virussign_downloader.py --date 2026/05/16
+
+Credentials:
+  Create 'virussign.auth' in the same directory as this script:
+    Line 1: username
+    Line 2: password
+
+  Example:
+    a_sidi
+    your_password_here
+
+  IMPORTANT: add 'virussign.auth' to your .gitignore.
+        """,
+    )
+    parser.add_argument(
+        "date",
+        nargs="?",
+        help="Date in YYYY/MM/DD format (e.g. 2026/05/16)",
+    )
+    parser.add_argument(
+        "--date",
+        dest="date_flag",
+        metavar="YYYY/MM/DD",
+        help="Alternative way to specify the date",
+    )
+    args = parser.parse_args()
+
+    date_input = args.date or args.date_flag
+    if not date_input:
+        parser.error("A date is required. Example: python virussign_downloader.py 2026/05/16")
+
+    try:
+        download_for_date(date_input)
+    except (RuntimeError, ValueError) as exc:
+        print(f"\n[error] {exc}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n[interrupted] Download aborted by user.")
+        sys.exit(130)
+
+
+if __name__ == "__main__":
+    main()

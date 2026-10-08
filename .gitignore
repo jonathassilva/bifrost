@@ -220,3 +220,4 @@ __marimo__/
 .streamlit/secrets.toml
 
 downloaders/virussign.auth
+decrypters/virussign_sidi.asc

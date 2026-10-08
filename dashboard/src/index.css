@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-zinc-800 font-sans antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+  * {
+    box-sizing: border-box;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-gray-200 rounded-xl p-4 shadow-sm;
+  }
+  .card-title {
+    @apply text-xs font-medium text-gray-500 uppercase tracking-widest mb-3;
+  }
+  .kpi-card {
+    @apply bg-white border border-gray-200 rounded-xl p-4 shadow-sm;
+  }
+  .kpi-label {
+    @apply text-xs text-gray-500 mb-1 uppercase tracking-wider;
+  }
+  .kpi-value {
+    @apply text-2xl font-semibold text-zinc-800;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .kpi-sub {
+    @apply text-xs text-gray-400 mt-1;
+  }
+  .tag {
+    @apply inline-flex items-center gap-1.5 bg-gray-100 border border-gray-200 rounded-md px-2.5 py-1 text-xs text-gray-600;
+  }
+}
