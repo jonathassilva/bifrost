@@ -54,17 +54,33 @@ GENERIC_LABEL_PATTERNS = re.compile(
 # Mapeamento de category a partir do best_label
 # A ordem importa: regras mais específicas primeiro
 # ---------------------------------------------------------------------------
+
+def _token(word: str) -> str:
+    """
+    Casa `word` apenas como token isolado, delimitado por qualquer coisa que não
+    seja letra (início/fim, '.', '/', ':', '-', '_', dígitos...).
+    Necessário para siglas curtas: sem isso, 'RAT' casaria com 'Operator',
+    'Pirate', 'Corporate' e 'PUP' com 'Pupil'.
+    Obs.: \\b não serve aqui porque trata '_' e dígitos como parte da palavra.
+    """
+    return rf"(?<![a-z]){word}(?![a-z])"
+
+
+# RAT isolado (Android.Rat.X) OU sufixo em CamelCase (AsyncRAT, SpyRAT, AndroidRAT_x).
+# O sufixo exige 'RAT' maiúsculo após minúscula para não casar 'Separate', 'Ratings'.
+_RAT = rf"{_token('rat')}|(?-i:[a-z]RAT)(?![a-z])"
+
 CATEGORY_RULES = [
-    (re.compile(r"Trojan-Banker|Banker", re.I),          "Trojan-Banker"),
-    (re.compile(r"Trojan-Spy|SpyNote|Spyware", re.I),    "Trojan-Spy"),
-    (re.compile(r"Trojan-Dropper|Dropper", re.I),        "Trojan-Dropper"),
-    (re.compile(r"Trojan-Downloader|Downloader", re.I),  "Trojan-Downloader"),
-    (re.compile(r"Backdoor|RAT", re.I),                  "Backdoor"),
-    (re.compile(r"Mirai|Gafgyt|XorDDoS|Botnet", re.I),  "Botnet"),
-    (re.compile(r"HackTool|Metasploit|Masplot", re.I),   "HackTool"),
-    (re.compile(r"AdWare|Adlo|MobiDash", re.I),          "Adware"),
-    (re.compile(r"PUA|PUP|Riskware|Unwanted", re.I),     "PUA"),
-    (re.compile(r"Trojan", re.I),                        "Trojan"),
+    (re.compile(r"Trojan-Banker|Banker", re.I),                       "Trojan-Banker"),
+    (re.compile(r"Trojan-Spy|SpyNote|Spyware", re.I),                 "Trojan-Spy"),
+    (re.compile(r"Trojan-Dropper|Dropper", re.I),                     "Trojan-Dropper"),
+    (re.compile(r"Trojan-Downloader|Downloader", re.I),               "Trojan-Downloader"),
+    (re.compile(rf"Backdoor|{_RAT}", re.I),                           "Backdoor"),
+    (re.compile(r"Mirai|Gafgyt|XorDDoS|Botnet", re.I),                "Botnet"),
+    (re.compile(r"HackTool|Metasploit|Masplot", re.I),                "HackTool"),
+    (re.compile(r"AdWare|(?<![a-z])Adlo|MobiDash", re.I),             "Adware"),
+    (re.compile(rf"{_token('PUA')}|{_token('PUP')}|Riskware|Unwanted", re.I), "PUA"),
+    (re.compile(r"Trojan", re.I),                                     "Trojan"),
 ]
 
 CSV_COLUMNS = [
