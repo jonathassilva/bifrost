@@ -247,7 +247,7 @@ if __name__ == '__main__':
                         help="'install' (default): instala APKs no device via ADB (DEX e desconhecidos são ignorados). "
                              "'extract': extrai as amostras (.apk/.dex/.bin) para ./samples/")
     parser.add_argument('entry',    help="Modo install: string CSV. Modo extract: nome do arquivo .txt.")
-    parser.add_argument('base_dir', help="Diretório onde estão os ZIPs. Ex: C:\\analise\\260603\\")
+    parser.add_argument('base_dir', help="Diretório onde estão os ZIPs. Ex: C:\\analise\\20260603\\")
 
     args = parser.parse_args()
 
