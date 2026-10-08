@@ -2,7 +2,18 @@ import subprocess
 import argparse
 import os
 import shutil
+import sys
 import zipfile
+
+
+# Senha padrão da indústria para arquivos de amostras (ZipCrypto)
+ZIP_PASSWORD = b"infected"
+
+# Assinaturas (magic bytes) usadas para identificar o tipo real da amostra
+MAGIC_APK = b"PK\x03\x04"   # APK é um ZIP
+MAGIC_DEX = b"dex\n"         # Dalvik Executable: "dex\n035\0", "dex\n039\0"...
+
+EXTENSION_BY_TYPE = {"apk": ".apk", "dex": ".dex", "unknown": ".bin"}
 
 
 # ── Funções compartilhadas ────────────────────────────────────────────────────
@@ -40,18 +51,41 @@ def extract_vir(zip_path, internal_path):
             raise FileNotFoundError(f"[ERRO] '{internal_path}' não encontrado dentro do ZIP.\n"
                                     f"       Arquivos disponíveis: {zip_entries[:5]}...")
 
-        zf.extract(match, extract_dir)
+        try:
+            # pwd é ignorado em entradas sem criptografia, então serve para ambos os casos
+            zf.extract(match, extract_dir, pwd=ZIP_PASSWORD)
+        except RuntimeError as e:
+            raise RuntimeError(f"[ERRO] Falha ao descompactar '{match}' com a senha padrão: {e}") from e
+        except NotImplementedError as e:
+            # zipfile só suporta ZipCrypto; ZIPs com AES precisam de pyzipper ou 7-Zip
+            raise RuntimeError(f"[ERRO] Criptografia do ZIP não suportada pelo zipfile (AES?): {e}") from e
         vir_path = os.path.join(extract_dir, match.replace('/', os.sep))
         print(f"[OK] Arquivo extraído    : {vir_path}")
         return vir_path
 
 
-def rename_vir_to_apk(vir_path):
-    base     = os.path.splitext(vir_path)[0]
-    apk_path = base + '.apk'
-    shutil.copy2(vir_path, apk_path)
-    print(f"[OK] Convertido para APK : {apk_path}")
-    return apk_path
+def detect_sample_type(path):
+    """Identifica o tipo real da amostra pelos primeiros bytes: 'apk', 'dex' ou 'unknown'."""
+    with open(path, 'rb') as f:
+        head = f.read(4)
+    if head == MAGIC_APK:
+        return 'apk'
+    if head == MAGIC_DEX:
+        return 'dex'
+    return 'unknown'
+
+
+def convert_vir(vir_path):
+    """
+    Copia o .vir para a extensão correspondente ao seu tipo real
+    (.apk, .dex ou .bin). Retorna (caminho_convertido, tipo).
+    """
+    sample_type = detect_sample_type(vir_path)
+    out_path    = os.path.splitext(vir_path)[0] + EXTENSION_BY_TYPE[sample_type]
+    shutil.copy2(vir_path, out_path)
+    print(f"[OK] Tipo detectado      : {sample_type}")
+    print(f"[OK] Convertido para     : {out_path}")
+    return out_path, sample_type
 
 
 def cleanup_vir(vir_path):
@@ -73,9 +107,9 @@ def cleanup_vir(vir_path):
             break
 
 
-def cleanup(vir_path, apk_path):
-    """Remove o .vir, o .apk e os diretórios intermediários criados pela extração."""
-    for path in [vir_path, apk_path]:
+def cleanup(vir_path, out_path):
+    """Remove o .vir, o arquivo convertido e os diretórios intermediários criados pela extração."""
+    for path in [vir_path, out_path]:
         try:
             if os.path.exists(path):
                 os.remove(path)
@@ -125,12 +159,23 @@ def run_install(csv_entry, base_dir):
     zip_name, internal_path = parse_csv_entry(csv_entry)
     zip_path = locate_zip(base_dir, zip_name)
     vir_path = extract_vir(zip_path, internal_path)
-    apk_path = rename_vir_to_apk(vir_path)
-    check_adb_device()
-    install_apk(apk_path)
-    cleanup(vir_path, apk_path)
+    out_path, sample_type = convert_vir(vir_path)
+
+    if sample_type != 'apk':
+        print(f"[AVISO] Amostra do tipo '{sample_type}' não é instalável via ADB; instalação ignorada.")
+        print("        Use --mode extract para obter o arquivo para análise.")
+        cleanup(vir_path, out_path)
+        print("\n=== Instalação ignorada ===\n")
+        return False
+
+    try:
+        check_adb_device()
+        install_apk(out_path)
+    finally:
+        cleanup(vir_path, out_path)   # nunca deixa a amostra solta no disco, mesmo em falha
 
     print("\n=== Instalação concluída ===\n")
+    return True
 
 
 # ── Modo extract ──────────────────────────────────────────────────────────────
@@ -163,12 +208,13 @@ def run_extract(txt_file, base_dir):
             zip_name, internal_path = parse_csv_entry(line)
             zip_path = locate_zip(base_dir, zip_name)
             vir_path = extract_vir(zip_path, internal_path)
-            apk_path = rename_vir_to_apk(vir_path)
+            out_path, sample_type = convert_vir(vir_path)
+            if sample_type == 'unknown':
+                print("[AVISO] Tipo não reconhecido; salvo como .bin para análise manual.")
 
-            # Move o .apk para samples/ e remove o .vir
-            apk_filename = os.path.basename(apk_path)
-            dest_path    = os.path.join(samples_dir, apk_filename)
-            shutil.move(apk_path, dest_path)
+            # Move o arquivo convertido para samples/ e remove o .vir
+            dest_path = os.path.join(samples_dir, os.path.basename(out_path))
+            shutil.move(out_path, dest_path)
             print(f"[OK] Movido para samples : {dest_path}")
 
             cleanup_vir(vir_path)
@@ -196,15 +242,17 @@ def run_extract(txt_file, base_dir):
 # ── Entrada via CLI ───────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Instala ou extrai APKs a partir de entradas do módulo de análise.")
+    parser = argparse.ArgumentParser(description="Instala ou extrai amostras (APK/DEX) a partir de entradas do módulo de análise.")
     parser.add_argument('--mode', choices=['install', 'extract'], default='install',
-                        help="'install' (default): instala no device via ADB. 'extract': extrai APKs para ./samples/")
+                        help="'install' (default): instala APKs no device via ADB (DEX e desconhecidos são ignorados). "
+                             "'extract': extrai as amostras (.apk/.dex/.bin) para ./samples/")
     parser.add_argument('entry',    help="Modo install: string CSV. Modo extract: nome do arquivo .txt.")
     parser.add_argument('base_dir', help="Diretório onde estão os ZIPs. Ex: C:\\analise\\260603\\")
 
     args = parser.parse_args()
 
     if args.mode == 'install':
-        run_install(args.entry, args.base_dir)
+        installed = run_install(args.entry, args.base_dir)
+        sys.exit(0 if installed else 2)   # 2 = amostra não instalável (ex.: DEX)
     elif args.mode == 'extract':
         run_extract(args.entry, args.base_dir)
