@@ -5,7 +5,28 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
-const PORT = 3001
+const PORT = Number(process.env.PORT) || 3001
+// Somente loopback por padrão: os dados de threat intel não devem ficar expostos na rede.
+// Para expor conscientemente (ex.: VM de análise), defina HOST=0.0.0.0.
+const HOST = process.env.HOST || '127.0.0.1'
+
+// Proteção contra DNS rebinding: um site malicioso pode resolver o próprio domínio
+// para 127.0.0.1 e ler a API pelo navegador da vítima. Só aceitamos Host de loopback
+// (ou os nomes extras listados em ALLOWED_HOSTS, separados por vírgula).
+const ALLOWED_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+  ...(process.env.ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean),
+])
+
+app.use((req, res, next) => {
+  const hostname = (req.headers.host || '').toLowerCase().replace(/:\d+$/, '')
+  if (!ALLOWED_HOSTS.has(hostname)) {
+    return res.status(403).json({ error: 'Host not allowed' })
+  }
+  next()
+})
 
 // Load config.json
 function loadConfig() {
@@ -29,7 +50,9 @@ app.get('/api/config', (req, res) => {
 app.get('/api/data/:group', (req, res) => {
   const config = loadConfig()
   const group = req.params.group
-  const dirPath = config.directories[group]
+  // Object.hasOwn evita resolver propriedades herdadas ("constructor", "__proto__"...)
+  const directories = config.directories || {}
+  const dirPath = Object.hasOwn(directories, group) ? directories[group] : undefined
 
   if (!dirPath) {
     return res.status(404).json({ error: `Group "${group}" not found in config.json` })
@@ -68,7 +91,10 @@ app.get('/api/data/:group', (req, res) => {
   res.json({ group, files: loadedFiles, csvFiles: allRows })
 })
 
-app.listen(PORT, () => {
-  console.log(`[server] API running at http://localhost:${PORT}`)
+app.listen(PORT, HOST, () => {
+  console.log(`[server] API running at http://${HOST}:${PORT}`)
+  if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
+    console.warn(`[server] ATENÇÃO: API exposta em ${HOST}. Qualquer máquina com acesso à rede pode ler os dados.`)
+  }
   console.log(`[server] Config loaded from config.json`)
 })

@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'http://127.0.0.1:3001', // mesmo endereço do bind do server.js (localhost pode resolver para ::1 no Node 17+)
         changeOrigin: true,
       },
     },
