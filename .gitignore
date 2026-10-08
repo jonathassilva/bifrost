@@ -221,3 +221,4 @@ __marimo__/
 
 downloaders/virussign.auth
 decrypters/virussign_sidi.asc
+dashboard/node_modules/

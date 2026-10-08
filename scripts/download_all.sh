@@ -2,9 +2,16 @@
 
 # download_all.sh
 # Usage: ./download_all.sh --source malware|android
+#
+# Reads one date per line from dates.txt (YYYY/MM/DD or YYYYMMDD) and runs the
+# matching downloader for each one. Output goes to the console AND is appended
+# to download-<source>.log in this directory.
 
-# Determine script directory
+set -u
+
+# Determine script and repository directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Parse arguments
 if [[ "$#" -lt 2 ]]; then
@@ -16,7 +23,7 @@ SOURCE=""
 while [[ "$#" -gt 0 ]]; do
   case $1 in
     --source)
-      SOURCE="$2"
+      SOURCE="${2:-}"
       shift 2
       ;;
     *)
@@ -39,6 +46,13 @@ else
   DOWNLOADER="android_downloader.py"
 fi
 
+# Prefer python3 (many Linux distros don't ship a 'python' alias)
+PYTHON_BIN="$(command -v python3 || command -v python || true)"
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "Python not found in PATH (tried python3 and python)."
+  exit 1
+fi
+
 DATES_FILE="$SCRIPT_DIR/dates.txt"
 LOG_FILE="$SCRIPT_DIR/download-$SOURCE.log"
 
@@ -47,10 +61,25 @@ if [[ ! -f "$DATES_FILE" ]]; then
   exit 1
 fi
 
-while IFS= read -r DATE; do
-  # Skip empty lines
-  [[ -z "$DATE" ]] && continue
-  python "$(dirname "$SCRIPT_DIR")/downloaders/$DOWNLOADER" --date "$DATE
-done < "$DATES_FILE"
+TOTAL=0
+FAILED=0
 
-echo "Download completed. Log saved to $LOG_FILE"
+# - fd 3 keeps the dates file away from the child processes' stdin
+# - '|| [[ -n "$DATE" ]]' processes the last line even without a trailing newline
+while IFS= read -r -u 3 DATE || [[ -n "$DATE" ]]; do
+  DATE="${DATE%$'\r'}"                 # tolerate CRLF (file edited on Windows)
+  DATE="${DATE//[[:space:]]/}"         # strip stray spaces/tabs
+  [[ -z "$DATE" || "$DATE" == \#* ]] && continue   # skip blanks and comments
+
+  TOTAL=$((TOTAL + 1))
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] ===== $SOURCE :: $DATE =====" | tee -a "$LOG_FILE"
+
+  "$PYTHON_BIN" "$REPO_ROOT/downloaders/$DOWNLOADER" --date "$DATE" 2>&1 | tee -a "$LOG_FILE"
+  if [[ "${PIPESTATUS[0]}" -ne 0 ]]; then
+    FAILED=$((FAILED + 1))
+    echo "[warn] Downloader failed for $DATE" | tee -a "$LOG_FILE"
+  fi
+done 3< "$DATES_FILE"
+
+echo "Download completed: $TOTAL date(s), $FAILED failure(s). Log saved to $LOG_FILE"
+[[ "$FAILED" -eq 0 ]]

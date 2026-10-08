@@ -16,9 +16,9 @@ Both scripts expect a single argument `--source` that determines which downloade
 --source android   # uses downloaders/android_downloader.py
 ```
 
-The scripts read a file named `dates.txt` placed in the same directory. Each line of `dates.txt` must contain a date in the format `YYYY/MM/DD`. For every date, the appropriate Python downloader is invoked with the `--date` flag.
+The scripts read a file named `dates.txt` placed in the same directory. Each line of `dates.txt` must contain one date, as `YYYY/MM/DD`, `YYYY-MM-DD` or `YYYYMMDD`. Empty lines and lines starting with `#` are ignored, and both LF and CRLF line endings are accepted. For every date, the appropriate Python downloader is invoked with the `--date` flag.
 
-All output (stdout and stderr) from the Python scripts is appended to `download.log` in this directory, which can be inspected for any errors or download issues.
+All output (stdout and stderr) from the Python scripts is appended to `download-<source>.log` in this directory (e.g. `download-android.log`). The Bash script also echoes it to the console; the Windows script writes it only to the log. Both scripts print a final summary and exit with code 1 if any date failed.
 
 ## Example
 
