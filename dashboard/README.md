@@ -13,8 +13,8 @@ Edite o arquivo `config.json` na raiz do projeto com os caminhos das suas pastas
 ```json
 {
   "directories": {
-    "android-malware": "C:\\Users\\user\\Documents\\codes\\bifrost\\android-virus-sign\\260603",
-    "general-malware": "C:\\Users\\user\\Documents\\codes\\bifrost\\malware-virus-sign\\260603"
+    "android-malware": "C:\\Users\\user\\Documents\\codes\\bifrost\\android-virus-sign\\20260603",
+    "general-malware": "C:\\Users\\user\\Documents\\codes\\bifrost\\malware-virus-sign\\20260603"
   }
 }
 ```
