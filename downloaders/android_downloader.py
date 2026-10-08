@@ -45,6 +45,7 @@ from bs4 import BeautifulSoup
 # A barra final é obrigatória: sem ela, urljoin() descarta o segmento "android"
 # ao resolver hrefs relativos (ex.: ".../android" + "x.zip" -> ".../x.zip").
 BASE_URL         = "https://premium2.virussign.com/android/"
+# Default output root. Override with --output-root or BIFROST_OUTPUT_ROOT.
 OUTPUT_ROOT = Path("../android-virus-sign")
 AUTH_FILE        = Path(__file__).parent / "virussign.auth"
 ARCHIVE_PASSWORD = "infected"
@@ -255,7 +256,12 @@ def run_wget_download(
 # Core workflow
 # ──────────────────────────────────────────────────────────────────────────────
 
-def download_for_date(date_input: str) -> None:
+def resolve_output_root(cli_value: str | None = None) -> Path:
+    """Precedence: --output-root  >  BIFROST_OUTPUT_ROOT  >  OUTPUT_ROOT (default)."""
+    return Path(cli_value or os.environ.get("BIFROST_OUTPUT_ROOT") or OUTPUT_ROOT)
+
+
+def download_for_date(date_input: str, output_root: str | None = None) -> None:
     date_compact = parse_date(date_input)          # YYYYMMDD -> local folder name
     file_token   = android_file_token(date_compact)  # YYMMDD  -> matches remote file names
     print(f"\n[info] Target date : {date_compact} (remote file token: {file_token})")
@@ -266,7 +272,7 @@ def download_for_date(date_input: str) -> None:
     username, password = load_credentials()
     print(f"[info] Credentials : loaded from {AUTH_FILE} (user: {username})")
 
-    dest_dir = OUTPUT_ROOT / date_compact
+    dest_dir = resolve_output_root(output_root) / date_compact
     dest_dir.mkdir(parents=True, exist_ok=True)
     print(f"[info] Output dir  : {dest_dir.resolve()}\n")
 
@@ -354,6 +360,11 @@ Credentials:
         metavar="YYYY/MM/DD",
         help="Alternative way to specify the date",
     )
+    parser.add_argument(
+        "--output-root",
+        metavar="DIR",
+        help=f"Root folder for downloads (default: $BIFROST_OUTPUT_ROOT or {OUTPUT_ROOT})",
+    )
     args = parser.parse_args()
 
     date_input = args.date or args.date_flag
@@ -361,7 +372,7 @@ Credentials:
         parser.error("A date is required. Example: python virussign_downloader.py 2026/05/16")
 
     try:
-        download_for_date(date_input)
+        download_for_date(date_input, args.output_root)
     except (RuntimeError, ValueError) as exc:
         print(f"\n[error] {exc}", file=sys.stderr)
         sys.exit(1)

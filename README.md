@@ -30,6 +30,14 @@ your_password
 
 > **Important:** `virussign.auth` must be listed in `.gitignore`. Never commit credentials to version control.
 
+On Linux/macOS, restrict the file to your user (the scripts warn if it is readable by others):
+
+```bash
+chmod 600 downloaders/virussign.auth
+```
+
+The password is never passed on the wget command line: it is written to a temporary config file readable only by your user and deleted as soon as the download finishes.
+
 ---
 
 ## Usage
@@ -52,6 +60,12 @@ To download several dates at once, see [`scripts/README.md`](scripts/README.md).
 ---
 
 ## Output
+
+The root folder is chosen in this order:
+
+1. `--output-root DIR` on the command line
+2. the `BIFROST_OUTPUT_ROOT` environment variable (also honored by the batch scripts)
+3. the `OUTPUT_ROOT` default defined at the top of each downloader
 
 Downloads are saved to:
 
