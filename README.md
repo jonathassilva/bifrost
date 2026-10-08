@@ -21,7 +21,7 @@ Given a target date, the script fetches the corresponding sample archives and me
 
 ## Credentials
 
-Create a file named `virussign.auth` in the same directory as the script. It must contain exactly two lines:
+Create a file named `virussign.auth` inside `downloaders/` (same directory as the scripts). It must contain exactly two lines:
 
 ```
 your_username
@@ -35,16 +35,19 @@ your_password
 ## Usage
 
 ```bash
-python virussign_downloader.py 2026/05/19
+python downloaders/malwares_downloader.py 2026/05/19   # general malware feed
+python downloaders/android_downloader.py  2026/05/19   # Android feed
 ```
 
 Or using the named flag:
 
 ```bash
-python virussign_downloader.py --date 2026/05/19
+python downloaders/malwares_downloader.py --date 2026/05/19
 ```
 
-The date must be in `YYYY/MM/DD` format.
+The date can be given as `YYYY/MM/DD`, `YYYY-MM-DD` or `YYYYMMDD`.
+
+To download several dates at once, see [`scripts/README.md`](scripts/README.md).
 
 ---
 
