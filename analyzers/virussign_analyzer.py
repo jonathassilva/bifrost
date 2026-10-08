@@ -221,7 +221,6 @@ def extract_metadata(input_dir: Path) -> Path:
 
 def collect_unique_engines(metadata_dir: Path) -> list[str]:
     engines = set()
-    header_keys = {"location", "md5", "sha1", "sha256", "type", "positives", "scandate(gmt)"}
 
     for log_file in metadata_dir.glob("*.log"):
         content = log_file.read_text(encoding="utf-8", errors="replace")
@@ -235,11 +234,6 @@ def collect_unique_engines(metadata_dir: Path) -> list[str]:
                 parts = line.split("\t")
                 if parts:
                     engines.add(parts[0].strip())
-            else:
-                key = line.split(":")[0].strip().lower()
-                if key not in header_keys:
-                    # linha inesperada no cabeçalho — ignorar
-                    pass
 
     unique_sorted = sorted(engines)
     log.info("Engines únicas encontradas (%d): %s", len(unique_sorted), ", ".join(unique_sorted))
