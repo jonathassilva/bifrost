@@ -1,4 +1,5 @@
 @echo off
+setlocal EnableDelayedExpansion
 rem download_all.bat
 rem Usage: download_all.bat --source malware|android
 
@@ -37,8 +38,21 @@ if not exist "%DATES_FILE%" (
     exit /b 1
 )
 
-for /F "usebackq delims=" %%D in ("%DATES_FILE%") do (
-    python "%~dp0..\downloaders\%DOWNLOADER%" --date "%%D"
+set /a TOTAL=0
+set /a FAILED=0
+
+rem FOR /F already skips empty lines; eol=# skips comment lines
+for /F "usebackq eol=# tokens=* delims=" %%D in ("%DATES_FILE%") do (
+    set /a TOTAL+=1
+    echo ===== %SOURCE% :: %%D =====
+    >> "%LOG_FILE%" echo [!DATE! !TIME!] ===== %SOURCE% :: %%D =====
+    python "%~dp0..\downloaders\%DOWNLOADER%" --date "%%D" >> "%LOG_FILE%" 2>&1
+    if errorlevel 1 (
+        set /a FAILED+=1
+        echo [warn] Downloader failed for %%D - see log
+        >> "%LOG_FILE%" echo [warn] Downloader failed for %%D
+    )
 )
 
-echo Download completed. Log saved to %LOG_FILE%
+echo Download completed: %TOTAL% date(s), %FAILED% failure(s). Log saved to %LOG_FILE%
+if %FAILED% GTR 0 exit /b 1
