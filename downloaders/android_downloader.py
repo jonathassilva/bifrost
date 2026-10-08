@@ -43,7 +43,6 @@ from bs4 import BeautifulSoup
 # A barra final é obrigatória: sem ela, urljoin() descarta o segmento "android"
 # ao resolver hrefs relativos (ex.: ".../android" + "x.zip" -> ".../x.zip").
 BASE_URL         = "https://premium2.virussign.com/android/"
-METADATA_PATH    = "metadata/"
 OUTPUT_ROOT = Path("../android-virus-sign")
 AUTH_FILE        = Path(__file__).parent / "virussign.auth"
 ARCHIVE_PASSWORD = "infected"
@@ -128,8 +127,15 @@ def parse_date(raw: str) -> str:
         raise ValueError(f"Invalid date '{raw}'. Expected YYYY/MM/DD or YYYYMMDD.")
     
     datetime.strptime(raw, "%Y%m%d")  # validates calendar correctness
-    # Specific formato 
-    return raw[2:]
+    return raw
+
+
+def android_file_token(date_compact: str) -> str:
+    """
+    The Android feed names files with a 2-digit year (Android_260603_01.zip),
+    so links are matched by YYMMDD. Local folders still use YYYYMMDD.
+    """
+    return date_compact[2:]
 
 
 def build_wget_auth(username: str, password: str) -> list[str]:
@@ -217,8 +223,9 @@ def run_wget_download(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def download_for_date(date_input: str) -> None:
-    date_compact = parse_date(date_input)
-    print(f"\n[info] Target date : {date_compact}")
+    date_compact = parse_date(date_input)          # YYYYMMDD -> local folder name
+    file_token   = android_file_token(date_compact)  # YYMMDD  -> matches remote file names
+    print(f"\n[info] Target date : {date_compact} (remote file token: {file_token})")
 
     wget_bin = check_wget()
     print(f"[info] wget binary : {wget_bin}")
@@ -231,32 +238,25 @@ def download_for_date(date_input: str) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
     print(f"[info] Output dir  : {dest_dir.resolve()}\n")
 
-    all_urls: list[str] = []
-
-    # ── Step 1: main listing ───────────────────────────────────────────────────
-    print(f"[step 1] Fetching main listing: {BASE_URL}")
+    # ── Step 1: listing (samples AND metadata live in the same directory) ─────
+    print(f"[step 1] Fetching listing: {BASE_URL}")
     html = fetch_listing(wget_bin, BASE_URL, auth_flags)
-    main_urls = parse_links(html, BASE_URL, date_compact)
-    print(f"         Found {len(main_urls)} file(s) matching {date_compact}")
-    all_urls.extend(main_urls)
+    # dict.fromkeys removes duplicates while preserving order
+    all_urls: list[str] = list(dict.fromkeys(parse_links(html, BASE_URL, file_token)))
 
-    # ── Step 2: metadata listing ───────────────────────────────────────────────
-    # metadata_url = urljoin(BASE_URL, METADATA_PATH)
-    print(f"\n[step 2] Fetching metadata listing: {BASE_URL}")
-    try:
-        html_meta = fetch_listing(wget_bin, BASE_URL, auth_flags)
-        meta_urls = parse_links(html_meta, BASE_URL, date_compact+"_metadata")
-        print(f"         Found {len(meta_urls)} metadata file(s) matching {date_compact}")
-        all_urls.extend(meta_urls)
-    except RuntimeError as exc:
-        print(f"[warn] Could not fetch metadata listing: {exc}", file=sys.stderr)
+    meta_count = sum(1 for u in all_urls if f"{file_token}_metadata" in u)
+    print(f"         Found {len(all_urls)} file(s) matching {file_token} "
+          f"({meta_count} metadata, {len(all_urls) - meta_count} sample archive(s))")
+    if meta_count == 0:
+        print(f"[warn] No metadata file found for {file_token}; "
+              "the analyzer will not be able to process this date.", file=sys.stderr)
 
     if not all_urls:
         print(f"\n[done] No files found for date {date_compact}. Nothing to download.")
         return
 
-    # ── Step 3: download all files via wget --input-file ──────────────────────
-    print(f"\n[step 3] Downloading {len(all_urls)} file(s) into {dest_dir.resolve()}")
+    # ── Step 2: download all files via wget --input-file ──────────────────────
+    print(f"\n[step 2] Downloading {len(all_urls)} file(s) into {dest_dir.resolve()}")
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
