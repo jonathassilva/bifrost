@@ -40,7 +40,9 @@ from bs4 import BeautifulSoup
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
 
-BASE_URL         = "https://premium2.virussign.com/android"
+# A barra final é obrigatória: sem ela, urljoin() descarta o segmento "android"
+# ao resolver hrefs relativos (ex.: ".../android" + "x.zip" -> ".../x.zip").
+BASE_URL         = "https://premium2.virussign.com/android/"
 METADATA_PATH    = "metadata/"
 OUTPUT_ROOT = Path("../android-virus-sign")
 AUTH_FILE        = Path(__file__).parent / "virussign.auth"
