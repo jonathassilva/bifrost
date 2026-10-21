@@ -196,6 +196,78 @@ def build_engines_json(detections: dict) -> str:
 # Etapa 1 — Localizar e extrair metadata
 # ---------------------------------------------------------------------------
 
+# Limites de extração (o metadata vem de terceiros; um ZIP pequeno pode
+# descompactar em gigabytes — "zip bomb"). Logs de AV têm poucos KB.
+MAX_LOG_BYTES   = 50 * 1024 * 1024        # por arquivo .log
+MAX_TOTAL_BYTES = 5 * 1024 * 1024 * 1024  # soma de todos os .log
+_CHUNK = 1024 * 1024
+
+
+def _is_suspicious_name(name: str) -> bool:
+    """
+    Nomes absolutos ou com '..' são rejeitados em vez de "consertados": o zipfile
+    os sanitizaria (ex.: '../x.log' -> 'x.log'), e o arquivo seria processado
+    como se fosse o log legítimo de uma amostra.
+    """
+    normalized = name.replace("\\", "/")
+    parts = normalized.split("/")
+    return (
+        normalized.startswith("/")
+        or (len(normalized) > 1 and normalized[1] == ":")   # C:/...
+        or ".." in parts
+    )
+
+
+def _extract_logs_safely(zf: zipfile.ZipFile, dest: Path) -> None:
+    """Extrai apenas arquivos .log, com validação de nome e limites de tamanho."""
+    dest_resolved = dest.resolve()
+    total = extracted = 0
+    skipped_other = []
+
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        name = info.filename
+        if not name.lower().endswith(".log"):
+            skipped_other.append(name)
+            continue
+        if _is_suspicious_name(name):
+            log.warning("Entrada rejeitada (caminho suspeito): %r", name)
+            continue
+
+        target = (dest / name).resolve()
+        if dest_resolved not in target.parents:          # defesa em profundidade
+            log.warning("Entrada rejeitada (fora do destino): %r", name)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        written = 0
+        # Conta os bytes REAIS descompactados: o tamanho declarado no ZIP pode ser forjado
+        with zf.open(info) as src, open(target, "wb") as out:
+            while chunk := src.read(_CHUNK):
+                written += len(chunk)
+                if written > MAX_LOG_BYTES:
+                    break
+                if total + written > MAX_TOTAL_BYTES:
+                    out.close()
+                    target.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"Metadata excede o limite total de {MAX_TOTAL_BYTES // 1024**2} MB "
+                        "descompactados; possível zip bomb. Extração abortada."
+                    )
+                out.write(chunk)
+        if written > MAX_LOG_BYTES:
+            target.unlink(missing_ok=True)
+            log.warning("Entrada rejeitada (> %d MB descompactada): %r", MAX_LOG_BYTES // 1024**2, name)
+            continue
+        total += written
+        extracted += 1
+
+    if skipped_other:
+        log.warning("%d arquivo(s) não-.log ignorado(s) no metadata: %s",
+                    len(skipped_other), ", ".join(skipped_other[:5]) + (" ..." if len(skipped_other) > 5 else ""))
+
+
 def extract_metadata(input_dir: Path) -> Path:
     candidates = list(input_dir.glob("*_metadata.zip"))
     if not candidates:
@@ -209,7 +281,7 @@ def extract_metadata(input_dir: Path) -> Path:
 
     log.info("Extraindo metadata de %s → %s", metadata_zip.name, metadata_dir)
     with zipfile.ZipFile(metadata_zip, "r") as zf:
-        zf.extractall(metadata_dir)
+        _extract_logs_safely(zf, metadata_dir)
 
     log.info("Logs extraídos: %d arquivos", len(list(metadata_dir.glob("*.log"))))
     return metadata_dir
