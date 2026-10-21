@@ -7,6 +7,7 @@ export function DirectoryStatus({ config, androidData, generalData, onReload }) 
       loading: { label: 'Carregando…', cls: 'text-yellow-500 animate-pulse' },
       ok:      { label: 'OK', cls: 'text-emerald-600' },
       error:   { label: 'Erro', cls: 'text-red-500' },
+      unconfigured: { label: 'Não configurado', cls: 'text-gray-400' },
     }
     const s = map[status] || map.idle
     return <span className={`text-xs font-mono ${s.cls}`}>{s.label}</span>
@@ -29,6 +30,12 @@ export function DirectoryStatus({ config, androidData, generalData, onReload }) 
           ↺ Recarregar
         </button>
       </div>
+
+      {config?.configStatus && config.configStatus !== 'ok' && (
+        <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 text-xs text-amber-800">
+          <span className="font-medium">Configuração: </span>{config.configError}
+        </div>
+      )}
 
       {rows.map(({ key, label, data, path }) => (
         <div key={key}
