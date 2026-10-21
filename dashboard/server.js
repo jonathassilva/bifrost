@@ -29,15 +29,42 @@ app.use((req, res, next) => {
 })
 
 // Load config.json
+// Retorna sempre { directories, configStatus, configError? }, onde configStatus é
+// 'ok' | 'missing' | 'invalid'. O frontend usa o status para orientar o usuário.
+const CONFIG_PATH = path.join(__dirname, 'config.json')
+
 function loadConfig() {
-  const configPath = path.join(__dirname, 'config.json')
+  const fail = (configStatus, configError) => ({ directories: {}, configStatus, configError })
+
+  let raw
   try {
-    const raw = fs.readFileSync(configPath, 'utf-8')
-    return JSON.parse(raw)
+    raw = fs.readFileSync(CONFIG_PATH, 'utf-8')
   } catch (err) {
-    console.error('[server] Failed to read config.json:', err.message)
-    return { directories: {} }
+    if (err.code === 'ENOENT') {
+      return fail('missing', 'config.json não encontrado. Copie config.example.json para config.json e ajuste os caminhos.')
+    }
+    return fail('invalid', `Não foi possível ler config.json: ${err.message}`)
   }
+
+  let parsed
+  try {
+    // O Bloco de Notas do Windows salva UTF-8 com BOM, que o JSON.parse rejeita
+    parsed = JSON.parse(raw.replace(/^\uFEFF/, ''))
+  } catch (err) {
+    return fail('invalid', `config.json não é um JSON válido (${err.message}). No Windows, escreva os caminhos com \\\\ ou /.`)
+  }
+
+  const dirs = parsed && parsed.directories
+  if (!dirs || typeof dirs !== 'object' || Array.isArray(dirs)) {
+    return fail('invalid', 'config.json deve conter um objeto "directories" no formato { "grupo": "caminho" }.')
+  }
+
+  // Mantém só entradas com caminho preenchido; o resto conta como "não configurado"
+  const directories = {}
+  for (const [group, dirPath] of Object.entries(dirs)) {
+    if (typeof dirPath === 'string' && dirPath.trim()) directories[group] = dirPath
+  }
+  return { directories, configStatus: 'ok' }
 }
 
 // GET /api/config — return configured directories (paths only, no data)
@@ -96,5 +123,10 @@ app.listen(PORT, HOST, () => {
   if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
     console.warn(`[server] ATENÇÃO: API exposta em ${HOST}. Qualquer máquina com acesso à rede pode ler os dados.`)
   }
-  console.log(`[server] Config loaded from config.json`)
+  const { configStatus, configError, directories } = loadConfig()
+  if (configStatus === 'ok') {
+    console.log(`[server] config.json carregado: ${Object.keys(directories).join(', ') || 'nenhum grupo configurado'}`)
+  } else {
+    console.warn(`[server] ATENÇÃO: ${configError}`)
+  }
 })
