@@ -100,7 +100,7 @@ def test_s7_extrai_so_logs_legitimos(analyzer, tmp_path):
         "payload.exe": "MZ", "script.sh": "rm",
     })
     meta = analyzer.extract_metadata(tmp_path)
-    criados = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file() and p.suffix != ".zip")
+    criados = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file() and p.suffix != ".zip")
     assert criados == ["metadata/aaa.log", "metadata/sub/bbb.log"]
     assert meta == tmp_path / "metadata"
 
