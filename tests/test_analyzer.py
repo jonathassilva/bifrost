@@ -27,6 +27,16 @@ import pytest
     ("Corporate.Tool", "Unknown"),
     ("Android.Hiddad.Ratings", "Unknown"),
     ("", "Unknown"),
+    # Fase 2: novas regras
+    ("not-a-virus:HEUR:RiskTool.AndroidOS.Pirater.a", "PUA"),
+    ("not-a-virus:Monitor.AndroidOS.Cerberus.a", "PUA"),
+    ("Android.RiskTool.Agent", "PUA"),
+    ("HEUR:Backdoor.Linux.Mirai.ad", "Botnet"),
+    ("HEUR:Trojan-Downloader.Shell.Mirai.a", "Botnet"),
+    # Fase 2: o que NÃO pode mudar
+    ("not-a-virus:HEUR:AdWare.AndroidOS.MobiDash.b", "Adware"),         # not-a-virus não engole Adware
+    ("not-a-virus:HEUR:Downloader.AndroidOS.Agent.b", "Trojan-Downloader"),
+    ("Trojan.Mirage.Generic", "Trojan"),                               # Mirage != Mirai
 ])
 def test_normalize_category(analyzer, label, expected):
     assert analyzer.normalize_category(label) == expected

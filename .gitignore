@@ -222,3 +222,14 @@ __marimo__/
 downloaders/virussign.auth
 decrypters/virussign_sidi.asc
 dashboard/node_modules/
+
+# ── Bifrost: artefatos sensíveis ────────────────────────────────────────────
+# Qualquer chave PGP/GPG exportada (não só a virussign_sidi.asc)
+*.asc
+*.gpg
+# Credenciais em qualquer pasta
+*.auth
+# Amostras de malware extraídas pelo installer --mode extract
+installers/samples/
+# Configuração local do dashboard (caminhos da máquina); o modelo é config.example.json
+dashboard/config.json

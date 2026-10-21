@@ -78,13 +78,23 @@ export function useCSVData() {
   const [androidData, setAndroidData] = useState({ status: 'idle', files: [], rows: [] })
   const [generalData, setGeneralData] = useState({ status: 'idle', files: [], rows: [] })
 
-  // Load config on mount
-  useEffect(() => {
+  // (Re)carrega o config.json pela API. Chamado na montagem e pelo botão Recarregar,
+  // para que edições no config.json valham sem reiniciar o servidor.
+  function fetchConfig() {
     fetch('/api/config')
       .then((r) => r.json())
       .then(setConfig)
-      .catch(() => setConfig({ directories: {} }))
-  }, [])
+      .catch(() =>
+        setConfig({
+          directories: {},
+          configStatus: 'invalid',
+          configError: 'Não foi possível contactar a API. O servidor (node server.js) está rodando?',
+        })
+      )
+  }
+
+  // Load config on mount
+  useEffect(fetchConfig, [])
 
   // Load data for a group
   async function loadGroup(group, setter) {
@@ -100,11 +110,21 @@ export function useCSVData() {
     }
   }
 
-  // Load both groups on mount (after config is ready)
+  // Grupo ausente do config.json não é erro: fica "não configurado" e não gera requisição
+  function loadOrSkip(cfg, group, setter) {
+    const directories = (cfg && cfg.directories) || {}
+    if (Object.hasOwn(directories, group)) {
+      loadGroup(group, setter)
+    } else {
+      setter({ status: 'unconfigured', files: [], rows: [] })
+    }
+  }
+
+  // Load groups whenever the config is (re)loaded
   useEffect(() => {
     if (!config) return
-    loadGroup('android-malware', setAndroidData)
-    loadGroup('general-malware', setGeneralData)
+    loadOrSkip(config, 'android-malware', setAndroidData)
+    loadOrSkip(config, 'general-malware', setGeneralData)
   }, [config])
 
   const androidMetrics = useMemo(() => computeMetrics(androidData.rows), [androidData.rows])
@@ -114,9 +134,9 @@ export function useCSVData() {
     [androidData.rows, generalData.rows]
   )
 
+  // Relê o config.json; o efeito acima recarrega os grupos em seguida
   function reload() {
-    loadGroup('android-malware', setAndroidData)
-    loadGroup('general-malware', setGeneralData)
+    fetchConfig()
   }
 
   return {

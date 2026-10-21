@@ -8,17 +8,40 @@ Dashboard local para análise e visualização de CSVs gerados pelo módulo de a
 
 ## Configuração dos diretórios
 
-Edite o arquivo `config.json` na raiz do projeto com os caminhos das suas pastas:
+O `config.json` é **local** (fica fora do git, pois contém caminhos da sua máquina).
+Crie-o a partir do modelo:
+
+```bash
+cp config.example.json config.json        # Linux/macOS
+copy config.example.json config.json      # Windows (cmd)
+```
+
+Depois ajuste os caminhos. Aponte cada grupo para a pasta onde o analyzer gerou os CSVs
+(normalmente `<data>/decrypted`):
 
 ```json
 {
   "directories": {
-    "android-malware": "C:\\Users\\jonat\\Documents\\codes\\android-virus-sign\20260919",
+    "android-malware": "C:\\Users\\voce\\analises\\android-virus-sign\\20260919\\decrypted",
+    "general-malware": "/home/voce/analises/malwares-virus-sign/20260919/decrypted"
   }
 }
 ```
 
-> Use `\\` para separar pastas no Windows, ou `/` no Linux/macOS.
+- No Windows, separe as pastas com `\\` (barra dupla) ou `/`. Uma barra simples `\` torna o JSON inválido.
+- Grupos que você não usa podem ser omitidos: aparecem como "Não configurado".
+- Após editar o arquivo, use o botão **↺ Recarregar** do dashboard; não é preciso reiniciar.
+- Se houver problema no arquivo (ausente, JSON inválido), o dashboard exibe um aviso explicando o que corrigir.
+
+> **Atualizando de uma versão anterior:** o `config.json` deixou de ser versionado, e o `git pull`
+> o apagaria (ou seria recusado, se você alterou o arquivo). Rode, a partir da raiz do repositório:
+>
+> ```bash
+> cp dashboard/config.json ../config.json.bak       # 1. backup
+> git checkout -- dashboard/config.json             # 2. descarta a versão local
+> git pull                                          # 3. atualiza
+> cp ../config.json.bak dashboard/config.json       # 4. restaura (agora ignorado pelo git)
+> ```
 
 ## Como rodar
 

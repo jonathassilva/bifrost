@@ -24,6 +24,8 @@ Output layout:
 """
 
 import argparse
+import contextlib
+import os
 import platform
 import shutil
 import subprocess
@@ -43,6 +45,7 @@ from bs4 import BeautifulSoup
 # A barra final é obrigatória: sem ela, urljoin() descarta o segmento "android"
 # ao resolver hrefs relativos (ex.: ".../android" + "x.zip" -> ".../x.zip").
 BASE_URL         = "https://premium2.virussign.com/android/"
+# Default output root. Override with --output-root or BIFROST_OUTPUT_ROOT.
 OUTPUT_ROOT = Path("../android-virus-sign")
 AUTH_FILE        = Path(__file__).parent / "virussign.auth"
 ARCHIVE_PASSWORD = "infected"
@@ -86,6 +89,25 @@ def check_wget() -> str:
     )
 
 
+def warn_if_insecure_permissions(path: Path) -> bool:
+    """
+    On POSIX systems, warn when the credentials file is readable or writable
+    by group/others. Returns True if a warning was issued.
+    (Windows uses ACLs, which st_mode does not reflect, so the check is skipped.)
+    """
+    if os.name != "posix":
+        return False
+    mode = path.stat().st_mode & 0o777
+    if mode & 0o077:
+        print(
+            f"[warn] {path} has permissions {oct(mode)} and can be read by other users.\n"
+            f"       Fix with: chmod 600 {path}",
+            file=sys.stderr,
+        )
+        return True
+    return False
+
+
 def load_credentials() -> tuple[str, str]:
     """
     Read username and password from virussign.auth.
@@ -106,6 +128,7 @@ def load_credentials() -> tuple[str, str]:
             "IMPORTANT: add 'virussign.auth' to your .gitignore."
         )
 
+    warn_if_insecure_permissions(AUTH_FILE)
     lines = [l.strip() for l in AUTH_FILE.read_text(encoding="utf-8").splitlines() if l.strip()]
 
     if len(lines) < 2:
@@ -138,9 +161,26 @@ def android_file_token(date_compact: str) -> str:
     return date_compact[2:]
 
 
-def build_wget_auth(username: str, password: str) -> list[str]:
-    """Return wget auth flags for the given credentials."""
-    return [f"--user={username}", f"--password={password}"]
+@contextlib.contextmanager
+def wget_auth(username: str, password: str):
+    """
+    Yield the wget flags that authenticate WITHOUT exposing the password on the
+    command line (where it would be visible in `ps`, Task Manager and shell history).
+
+    The credentials go into a temporary wgetrc file created by mkstemp (readable
+    only by the current user) and passed via --config. The file is always
+    removed on exit, even on errors or Ctrl+C.
+
+    Note: --config replaces the user's default ~/.wgetrc for these calls.
+    """
+    fd, path = tempfile.mkstemp(prefix="bifrost-wget-", suffix=".rc")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:   # closed before wget reads it (Windows)
+            fh.write(f"user = {username}\npassword = {password}\n")
+        yield [f"--config={path}"]
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(path)
 
 
 def fetch_listing(wget_bin: str, url: str, auth_flags: list[str]) -> str:
@@ -206,14 +246,8 @@ def run_wget_download(
             "--cut-dirs=1",            # drop the /subscribers/ path component
         ]
     )
-    # Print command without credentials for safety
-    safe_cmd = [wget_bin] + WGET_COMMON + ["--user=***", "--password=***"] + WGET_DOWNLOAD + [
-        f"--input-file={url_file}",
-        f"--directory-prefix={dest_dir}",
-        "--no-host-directories",
-        "--cut-dirs=1",
-    ]
-    print(f"[wget] {' '.join(safe_cmd)}\n")
+    # Safe to print: credentials live in the --config file, not in argv
+    print(f"[wget] {' '.join(cmd)}\n")
     result = subprocess.run(cmd)
     return result.returncode
 
@@ -222,7 +256,12 @@ def run_wget_download(
 # Core workflow
 # ──────────────────────────────────────────────────────────────────────────────
 
-def download_for_date(date_input: str) -> None:
+def resolve_output_root(cli_value: str | None = None) -> Path:
+    """Precedence: --output-root  >  BIFROST_OUTPUT_ROOT  >  OUTPUT_ROOT (default)."""
+    return Path(cli_value or os.environ.get("BIFROST_OUTPUT_ROOT") or OUTPUT_ROOT)
+
+
+def download_for_date(date_input: str, output_root: str | None = None) -> None:
     date_compact = parse_date(date_input)          # YYYYMMDD -> local folder name
     file_token   = android_file_token(date_compact)  # YYMMDD  -> matches remote file names
     print(f"\n[info] Target date : {date_compact} (remote file token: {file_token})")
@@ -232,58 +271,58 @@ def download_for_date(date_input: str) -> None:
 
     username, password = load_credentials()
     print(f"[info] Credentials : loaded from {AUTH_FILE} (user: {username})")
-    auth_flags = build_wget_auth(username, password)
 
-    dest_dir = OUTPUT_ROOT / date_compact
+    dest_dir = resolve_output_root(output_root) / date_compact
     dest_dir.mkdir(parents=True, exist_ok=True)
     print(f"[info] Output dir  : {dest_dir.resolve()}\n")
 
-    # ── Step 1: listing (samples AND metadata live in the same directory) ─────
-    print(f"[step 1] Fetching listing: {BASE_URL}")
-    html = fetch_listing(wget_bin, BASE_URL, auth_flags)
-    # dict.fromkeys removes duplicates while preserving order
-    all_urls: list[str] = list(dict.fromkeys(parse_links(html, BASE_URL, file_token)))
+    with wget_auth(username, password) as auth_flags:
+        # ── Step 1: listing (samples AND metadata live in the same directory) ─────
+        print(f"[step 1] Fetching listing: {BASE_URL}")
+        html = fetch_listing(wget_bin, BASE_URL, auth_flags)
+        # dict.fromkeys removes duplicates while preserving order
+        all_urls: list[str] = list(dict.fromkeys(parse_links(html, BASE_URL, file_token)))
 
-    meta_count = sum(1 for u in all_urls if f"{file_token}_metadata" in u)
-    print(f"         Found {len(all_urls)} file(s) matching {file_token} "
-          f"({meta_count} metadata, {len(all_urls) - meta_count} sample archive(s))")
-    if meta_count == 0:
-        print(f"[warn] No metadata file found for {file_token}; "
-              "the analyzer will not be able to process this date.", file=sys.stderr)
+        meta_count = sum(1 for u in all_urls if f"{file_token}_metadata" in u)
+        print(f"         Found {len(all_urls)} file(s) matching {file_token} "
+              f"({meta_count} metadata, {len(all_urls) - meta_count} sample archive(s))")
+        if meta_count == 0:
+            print(f"[warn] No metadata file found for {file_token}; "
+                  "the analyzer will not be able to process this date.", file=sys.stderr)
 
-    if not all_urls:
-        print(f"\n[done] No files found for date {date_compact}. Nothing to download.")
-        return
+        if not all_urls:
+            print(f"\n[done] No files found for date {date_compact}. Nothing to download.")
+            return
 
-    # ── Step 2: download all files via wget --input-file ──────────────────────
-    print(f"\n[step 2] Downloading {len(all_urls)} file(s) into {dest_dir.resolve()}")
+        # ── Step 2: download all files via wget --input-file ──────────────────────
+        print(f"\n[step 2] Downloading {len(all_urls)} file(s) into {dest_dir.resolve()}")
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as tmp:
-        url_file = Path(tmp.name)
-        build_url_file(all_urls, url_file)
-        print(f"[info]  URL list written to {url_file}")
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as tmp:
+            url_file = Path(tmp.name)
+            build_url_file(all_urls, url_file)
+            print(f"[info]  URL list written to {url_file}")
 
-    try:
-        exit_code = run_wget_download(wget_bin, url_file, dest_dir, auth_flags)
-    finally:
-        url_file.unlink(missing_ok=True)
+        try:
+            exit_code = run_wget_download(wget_bin, url_file, dest_dir, auth_flags)
+        finally:
+            url_file.unlink(missing_ok=True)
 
-    # ── Summary ────────────────────────────────────────────────────────────────
-    downloaded = list(dest_dir.iterdir())
-    print(f"\n[done] {len(downloaded)} file(s) saved to {dest_dir.resolve()}")
+        # ── Summary ────────────────────────────────────────────────────────────────
+        downloaded = list(dest_dir.iterdir())
+        print(f"\n[done] {len(downloaded)} file(s) saved to {dest_dir.resolve()}")
 
-    if exit_code != 0:
-        print(
-            f"[warn] wget exited with code {exit_code}. "
-            "Some files may not have downloaded. Check output above.",
-            file=sys.stderr,
-        )
+        if exit_code != 0:
+            print(
+                f"[warn] wget exited with code {exit_code}. "
+                "Some files may not have downloaded. Check output above.",
+                file=sys.stderr,
+            )
 
-    if downloaded:
-        print("\n  Reminder : extract archives in an isolated VM/sandbox.")
-        print(f"  Archive password (industry standard): {ARCHIVE_PASSWORD}")
+        if downloaded:
+            print("\n  Reminder : extract archives in an isolated VM/sandbox.")
+            print(f"  Archive password (industry standard): {ARCHIVE_PASSWORD}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -321,6 +360,11 @@ Credentials:
         metavar="YYYY/MM/DD",
         help="Alternative way to specify the date",
     )
+    parser.add_argument(
+        "--output-root",
+        metavar="DIR",
+        help=f"Root folder for downloads (default: $BIFROST_OUTPUT_ROOT or {OUTPUT_ROOT})",
+    )
     args = parser.parse_args()
 
     date_input = args.date or args.date_flag
@@ -328,7 +372,7 @@ Credentials:
         parser.error("A date is required. Example: python virussign_downloader.py 2026/05/16")
 
     try:
-        download_for_date(date_input)
+        download_for_date(date_input, args.output_root)
     except (RuntimeError, ValueError) as exc:
         print(f"\n[error] {exc}", file=sys.stderr)
         sys.exit(1)

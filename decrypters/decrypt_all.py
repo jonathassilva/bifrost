@@ -1,5 +1,24 @@
+r"""
+decrypt_all.py — descriptografa em lote os arquivos .pgp de uma pasta de data.
+
+Uso:
+    # Linux/macOS (a passphrase não fica no histórico do shell)
+    read -rs BIFROST_GPG_PASSPHRASE && export BIFROST_GPG_PASSPHRASE
+    python decrypters/decrypt_all.py --input-dir <OUTPUT_ROOT>/20260603 --key chave.asc
+
+    # Windows PowerShell
+    $env:BIFROST_GPG_PASSPHRASE = Read-Host -MaskInput
+    python decrypters\decrypt_all.py --input-dir D:\malwares-virus-sign\20260603 --key chave.asc
+
+Saída: <input-dir>/decrypted/<arquivo sem .pgp>
+
+Segurança: a passphrase é entregue ao gpg pelo stdin (--passphrase-fd 0) e nunca
+aparece na linha de comando. O argumento --passphrase ainda funciona, mas é obsoleto.
+"""
+
 import subprocess
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -68,7 +87,7 @@ def decrypt_file(gpg: str, encrypted_file: Path, output_file: Path, passphrase: 
         "--yes",
         "--ignore-mdc-error",
         "--pinentry-mode", "loopback",
-        "--passphrase", passphrase,
+        "--passphrase-fd", "0",       # lê a passphrase do stdin: nunca aparece em argv/ps
         "--output", str(output_file),
         "--decrypt", str(encrypted_file),
     ]
@@ -76,6 +95,7 @@ def decrypt_file(gpg: str, encrypted_file: Path, output_file: Path, passphrase: 
     try:
         subprocess.run(
             command,
+            input=(passphrase + "\n").encode("utf-8"),
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -136,7 +156,39 @@ def process_directory(gpg: str, input_dir: Path, passphrase: str) -> None:
 
 
 # ──────────────────────────────────────────────
-# 5. Ponto de entrada
+# 5. Obtenção da passphrase
+# ──────────────────────────────────────────────
+PASSPHRASE_ENV = "BIFROST_GPG_PASSPHRASE"
+
+
+def resolve_passphrase(cli_value: str | None) -> str:
+    """
+    Fonte oficial: variável de ambiente BIFROST_GPG_PASSPHRASE.
+    O argumento --passphrase ainda é aceito por compatibilidade, mas expõe a
+    passphrase em ps e no histórico do shell, por isso gera aviso.
+    """
+    if cli_value:
+        print(
+            f"[AVISO] --passphrase está obsoleto: a passphrase fica visível na lista de processos "
+            f"e no histórico do shell. Use a variável de ambiente {PASSPHRASE_ENV}.",
+            file=sys.stderr,
+        )
+        return cli_value
+
+    value = os.environ.get(PASSPHRASE_ENV)
+    if not value:
+        print(
+            f"[ERRO] Passphrase não informada. Defina a variável de ambiente {PASSPHRASE_ENV}.\n"
+            f"       Linux/macOS : read -rs {PASSPHRASE_ENV} && export {PASSPHRASE_ENV}\n"
+            f"       PowerShell  : $env:{PASSPHRASE_ENV} = Read-Host -MaskInput",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return value
+
+
+# ──────────────────────────────────────────────
+# 6. Ponto de entrada
 # ──────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
@@ -154,8 +206,7 @@ def main():
     )
     parser.add_argument(
         "--passphrase",
-        required=True,
-        help="Passphrase para a chave privada.",
+        help=f"OBSOLETO (inseguro). Use a variável de ambiente {PASSPHRASE_ENV}.",
     )
 
     args = parser.parse_args()
@@ -167,9 +218,11 @@ def main():
         print(f"[ERRO] Diretório não encontrado: {input_dir}")
         sys.exit(1)
 
+    passphrase = resolve_passphrase(args.passphrase)
+
     gpg = detect_gpg()
     import_key(gpg, key_file)
-    process_directory(gpg, input_dir, args.passphrase)
+    process_directory(gpg, input_dir, passphrase)
 
 
 if __name__ == "__main__":

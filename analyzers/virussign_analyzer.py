@@ -71,15 +71,19 @@ def _token(word: str) -> str:
 _RAT = rf"{_token('rat')}|(?-i:[a-z]RAT)(?![a-z])"
 
 CATEGORY_RULES = [
+    # Famílias de botnet primeiro: o label pode vir como Backdoor/Trojan-Downloader
+    # (ex.: "HEUR:Backdoor.Linux.Mirai"), mas a família define a categoria.
+    (re.compile(r"Mirai|Gafgyt|XorDDoS|Botnet", re.I),                "Botnet"),
     (re.compile(r"Trojan-Banker|Banker", re.I),                       "Trojan-Banker"),
     (re.compile(r"Trojan-Spy|SpyNote|Spyware", re.I),                 "Trojan-Spy"),
     (re.compile(r"Trojan-Dropper|Dropper", re.I),                     "Trojan-Dropper"),
     (re.compile(r"Trojan-Downloader|Downloader", re.I),               "Trojan-Downloader"),
     (re.compile(rf"Backdoor|{_RAT}", re.I),                           "Backdoor"),
-    (re.compile(r"Mirai|Gafgyt|XorDDoS|Botnet", re.I),                "Botnet"),
     (re.compile(r"HackTool|Metasploit|Masplot", re.I),                "HackTool"),
     (re.compile(r"AdWare|(?<![a-z])Adlo|MobiDash", re.I),             "Adware"),
-    (re.compile(rf"{_token('PUA')}|{_token('PUP')}|Riskware|Unwanted", re.I), "PUA"),
+    # "not-a-virus:" é o prefixo da Kaspersky para software indesejado (não malware).
+    # Fica DEPOIS de Adware de propósito: "not-a-virus:HEUR:AdWare..." continua Adware.
+    (re.compile(rf"{_token('PUA')}|{_token('PUP')}|Riskware|RiskTool|Unwanted|not-a-virus", re.I), "PUA"),
     (re.compile(r"Trojan", re.I),                                     "Trojan"),
 ]
 
@@ -193,8 +197,99 @@ def build_engines_json(detections: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Identificação da data
+# ---------------------------------------------------------------------------
+
+# Subpasta criada pelo decrypt_all.py; a data é o nome da pasta-pai
+DECRYPTED_DIRNAME = "decrypted"
+
+
+def resolve_date_dir(input_dir: Path) -> str:
+    """
+    Nome da pasta de data, usado na coluna date_dir e no nome do CSV.
+    O fluxo normal aponta o analyzer para <data>/decrypted/ (saída do
+    decrypt_all.py); nesse caso a data é o nome da pasta-pai.
+    """
+    if input_dir.name.lower() == DECRYPTED_DIRNAME and input_dir.parent != input_dir:
+        return input_dir.parent.name
+    return input_dir.name
+
+
+# ---------------------------------------------------------------------------
 # Etapa 1 — Localizar e extrair metadata
 # ---------------------------------------------------------------------------
+
+# Limites de extração (o metadata vem de terceiros; um ZIP pequeno pode
+# descompactar em gigabytes — "zip bomb"). Logs de AV têm poucos KB.
+MAX_LOG_BYTES   = 50 * 1024 * 1024        # por arquivo .log
+MAX_TOTAL_BYTES = 5 * 1024 * 1024 * 1024  # soma de todos os .log
+_CHUNK = 1024 * 1024
+
+
+def _is_suspicious_name(name: str) -> bool:
+    """
+    Nomes absolutos ou com '..' são rejeitados em vez de "consertados": o zipfile
+    os sanitizaria (ex.: '../x.log' -> 'x.log'), e o arquivo seria processado
+    como se fosse o log legítimo de uma amostra.
+    """
+    normalized = name.replace("\\", "/")
+    parts = normalized.split("/")
+    return (
+        normalized.startswith("/")
+        or (len(normalized) > 1 and normalized[1] == ":")   # C:/...
+        or ".." in parts
+    )
+
+
+def _extract_logs_safely(zf: zipfile.ZipFile, dest: Path) -> None:
+    """Extrai apenas arquivos .log, com validação de nome e limites de tamanho."""
+    dest_resolved = dest.resolve()
+    total = extracted = 0
+    skipped_other = []
+
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        name = info.filename
+        if not name.lower().endswith(".log"):
+            skipped_other.append(name)
+            continue
+        if _is_suspicious_name(name):
+            log.warning("Entrada rejeitada (caminho suspeito): %r", name)
+            continue
+
+        target = (dest / name).resolve()
+        if dest_resolved not in target.parents:          # defesa em profundidade
+            log.warning("Entrada rejeitada (fora do destino): %r", name)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        written = 0
+        # Conta os bytes REAIS descompactados: o tamanho declarado no ZIP pode ser forjado
+        with zf.open(info) as src, open(target, "wb") as out:
+            while chunk := src.read(_CHUNK):
+                written += len(chunk)
+                if written > MAX_LOG_BYTES:
+                    break
+                if total + written > MAX_TOTAL_BYTES:
+                    out.close()
+                    target.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"Metadata excede o limite total de {MAX_TOTAL_BYTES // 1024**2} MB "
+                        "descompactados; possível zip bomb. Extração abortada."
+                    )
+                out.write(chunk)
+        if written > MAX_LOG_BYTES:
+            target.unlink(missing_ok=True)
+            log.warning("Entrada rejeitada (> %d MB descompactada): %r", MAX_LOG_BYTES // 1024**2, name)
+            continue
+        total += written
+        extracted += 1
+
+    if skipped_other:
+        log.warning("%d arquivo(s) não-.log ignorado(s) no metadata: %s",
+                    len(skipped_other), ", ".join(skipped_other[:5]) + (" ..." if len(skipped_other) > 5 else ""))
+
 
 def extract_metadata(input_dir: Path) -> Path:
     candidates = list(input_dir.glob("*_metadata.zip"))
@@ -209,7 +304,7 @@ def extract_metadata(input_dir: Path) -> Path:
 
     log.info("Extraindo metadata de %s → %s", metadata_zip.name, metadata_dir)
     with zipfile.ZipFile(metadata_zip, "r") as zf:
-        zf.extractall(metadata_dir)
+        _extract_logs_safely(zf, metadata_dir)
 
     log.info("Logs extraídos: %d arquivos", len(list(metadata_dir.glob("*.log"))))
     return metadata_dir
@@ -281,7 +376,7 @@ def process_logs(
     md5_index: dict[str, str],
     output_csv: Path,
 ) -> None:
-    date_dir = input_dir.name
+    date_dir = resolve_date_dir(input_dir)
     log_files = sorted(metadata_dir.glob("*.log"))
     log.info("Processando %d arquivos de log...", len(log_files))
 
@@ -357,11 +452,23 @@ def main():
     if not input_dir.is_dir():
         raise SystemExit(f"Diretório não encontrado: {input_dir}")
 
-    output_csv = Path(args.output) if args.output else input_dir / f"{input_dir.name}.csv"
+    date_dir = resolve_date_dir(input_dir)
+    output_csv = Path(args.output) if args.output else input_dir / f"{date_dir}.csv"
 
     log.info("=== Bistrof Analyzer ===")
     log.info("Diretório de entrada : %s", input_dir)
+    log.info("Data (date_dir)      : %s", date_dir)
     log.info("CSV de saída         : %s", output_csv)
+
+    # CSV legado: versões anteriores nomeavam o CSV como decrypted.csv. Se ele ficar
+    # ao lado do novo, o dashboard (que lê todos os CSVs da pasta) duplica as amostras.
+    legacy_csv = input_dir / f"{DECRYPTED_DIRNAME}.csv"
+    if legacy_csv.exists() and legacy_csv.resolve() != output_csv.resolve():
+        log.warning(
+            "Encontrado CSV de versão anterior: %s. Ele contém as mesmas amostras com "
+            "date_dir='decrypted'; apague-o para não duplicar os dados no dashboard.",
+            legacy_csv,
+        )
 
     # Etapa 1 — Extrair metadata
     metadata_dir = extract_metadata(input_dir)
