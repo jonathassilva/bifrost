@@ -71,15 +71,19 @@ def _token(word: str) -> str:
 _RAT = rf"{_token('rat')}|(?-i:[a-z]RAT)(?![a-z])"
 
 CATEGORY_RULES = [
+    # Famílias de botnet primeiro: o label pode vir como Backdoor/Trojan-Downloader
+    # (ex.: "HEUR:Backdoor.Linux.Mirai"), mas a família define a categoria.
+    (re.compile(r"Mirai|Gafgyt|XorDDoS|Botnet", re.I),                "Botnet"),
     (re.compile(r"Trojan-Banker|Banker", re.I),                       "Trojan-Banker"),
     (re.compile(r"Trojan-Spy|SpyNote|Spyware", re.I),                 "Trojan-Spy"),
     (re.compile(r"Trojan-Dropper|Dropper", re.I),                     "Trojan-Dropper"),
     (re.compile(r"Trojan-Downloader|Downloader", re.I),               "Trojan-Downloader"),
     (re.compile(rf"Backdoor|{_RAT}", re.I),                           "Backdoor"),
-    (re.compile(r"Mirai|Gafgyt|XorDDoS|Botnet", re.I),                "Botnet"),
     (re.compile(r"HackTool|Metasploit|Masplot", re.I),                "HackTool"),
     (re.compile(r"AdWare|(?<![a-z])Adlo|MobiDash", re.I),             "Adware"),
-    (re.compile(rf"{_token('PUA')}|{_token('PUP')}|Riskware|Unwanted", re.I), "PUA"),
+    # "not-a-virus:" é o prefixo da Kaspersky para software indesejado (não malware).
+    # Fica DEPOIS de Adware de propósito: "not-a-virus:HEUR:AdWare..." continua Adware.
+    (re.compile(rf"{_token('PUA')}|{_token('PUP')}|Riskware|RiskTool|Unwanted|not-a-virus", re.I), "PUA"),
     (re.compile(r"Trojan", re.I),                                     "Trojan"),
 ]
 
