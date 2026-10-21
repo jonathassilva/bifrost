@@ -33,9 +33,15 @@ Depois ajuste os caminhos. Aponte cada grupo para a pasta onde o analyzer gerou 
 - Após editar o arquivo, use o botão **↺ Recarregar** do dashboard; não é preciso reiniciar.
 - Se houver problema no arquivo (ausente, JSON inválido), o dashboard exibe um aviso explicando o que corrigir.
 
-> **Atualizando de uma versão anterior:** o `config.json` deixou de ser versionado. Faça um backup
-> antes do `git pull`, pois o git remove a cópia local ao aplicar essa mudança:
-> `cp dashboard/config.json ~/config.json.bak` e, após o pull, `cp ~/config.json.bak dashboard/config.json`.
+> **Atualizando de uma versão anterior:** o `config.json` deixou de ser versionado, e o `git pull`
+> o apagaria (ou seria recusado, se você alterou o arquivo). Rode, a partir da raiz do repositório:
+>
+> ```bash
+> cp dashboard/config.json ../config.json.bak       # 1. backup
+> git checkout -- dashboard/config.json             # 2. descarta a versão local
+> git pull                                          # 3. atualiza
+> cp ../config.json.bak dashboard/config.json       # 4. restaura (agora ignorado pelo git)
+> ```
 
 ## Como rodar
 
