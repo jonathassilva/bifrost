@@ -37,3 +37,8 @@ def malware_dl():
 def installer():
     # escopo por teste: alguns testes fazem monkeypatch em __file__
     return load_module("installers/virussign_installer.py", "virussign_installer")
+
+
+@pytest.fixture(scope="session")
+def decrypter():
+    return load_module("decrypters/decrypt_all.py", "decrypt_all")
