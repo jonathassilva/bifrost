@@ -193,6 +193,25 @@ def build_engines_json(detections: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Identificação da data
+# ---------------------------------------------------------------------------
+
+# Subpasta criada pelo decrypt_all.py; a data é o nome da pasta-pai
+DECRYPTED_DIRNAME = "decrypted"
+
+
+def resolve_date_dir(input_dir: Path) -> str:
+    """
+    Nome da pasta de data, usado na coluna date_dir e no nome do CSV.
+    O fluxo normal aponta o analyzer para <data>/decrypted/ (saída do
+    decrypt_all.py); nesse caso a data é o nome da pasta-pai.
+    """
+    if input_dir.name.lower() == DECRYPTED_DIRNAME and input_dir.parent != input_dir:
+        return input_dir.parent.name
+    return input_dir.name
+
+
+# ---------------------------------------------------------------------------
 # Etapa 1 — Localizar e extrair metadata
 # ---------------------------------------------------------------------------
 
@@ -353,7 +372,7 @@ def process_logs(
     md5_index: dict[str, str],
     output_csv: Path,
 ) -> None:
-    date_dir = input_dir.name
+    date_dir = resolve_date_dir(input_dir)
     log_files = sorted(metadata_dir.glob("*.log"))
     log.info("Processando %d arquivos de log...", len(log_files))
 
@@ -429,11 +448,23 @@ def main():
     if not input_dir.is_dir():
         raise SystemExit(f"Diretório não encontrado: {input_dir}")
 
-    output_csv = Path(args.output) if args.output else input_dir / f"{input_dir.name}.csv"
+    date_dir = resolve_date_dir(input_dir)
+    output_csv = Path(args.output) if args.output else input_dir / f"{date_dir}.csv"
 
     log.info("=== Bistrof Analyzer ===")
     log.info("Diretório de entrada : %s", input_dir)
+    log.info("Data (date_dir)      : %s", date_dir)
     log.info("CSV de saída         : %s", output_csv)
+
+    # CSV legado: versões anteriores nomeavam o CSV como decrypted.csv. Se ele ficar
+    # ao lado do novo, o dashboard (que lê todos os CSVs da pasta) duplica as amostras.
+    legacy_csv = input_dir / f"{DECRYPTED_DIRNAME}.csv"
+    if legacy_csv.exists() and legacy_csv.resolve() != output_csv.resolve():
+        log.warning(
+            "Encontrado CSV de versão anterior: %s. Ele contém as mesmas amostras com "
+            "date_dir='decrypted'; apague-o para não duplicar os dados no dashboard.",
+            legacy_csv,
+        )
 
     # Etapa 1 — Extrair metadata
     metadata_dir = extract_metadata(input_dir)
